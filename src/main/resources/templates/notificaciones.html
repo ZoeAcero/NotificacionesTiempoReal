@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="es" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="'Notificaciones en Tiempo Real - ' + ${usuario}">Notificaciones</title>
+    <style>
+        /* Estilos CSS para mejorar la legibilidad y el estado */
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        h1 { border-bottom: 2px solid #eee; padding-bottom: 10px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+        th, td { padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }
+        .no-leida { font-weight: bold; background-color: #ffe0b2; /* Naranja claro */ }
+        .info { color: green; }
+        .alerta { color: orange; }
+        .urgente { color: red; font-weight: bold; }
+        button { cursor: pointer; padding: 5px 10px; margin: 2px; }
+    </style>
+</head>
+<body>
+
+<h1 th:text="'🔔 Notificaciones para: ' + ${usuario}">Notificaciones</h1>
+
+---
+
+<h2>⚙️ Filtro y Acciones</h2>
+<div>
+    <label for="filtroTipo">Filtrar por Tipo:</label>
+    <select id="filtroTipo">
+        <option value="TODOS">Todos</option>
+        <option value="INFO">INFO</option>
+        <option value="ALERTA">ALERTA</option>
+        <option value="URGENTE">URGENTE</option>
+    </select>
+    <button onclick="aplicarFiltro()">Aplicar Filtro</button>
+</div>
+
+---
+
+<h2>📝 Lista de Notificaciones</h2>
+<table>
+    <thead>
+    <tr>
+        <th>ID (Parcial)</th>
+        <th>Mensaje</th>
+        <th>Tipo</th>
+        <th>Fecha</th>
+        <th>Leído</th>
+        <th>Acción</th>
+    </tr>
+    </thead>
+    <tbody id="notificaciones-body">
+    </tbody>
+</table>
+
+<script th:inline="javascript">
+    // Obtener el nombre de usuario del modelo Thymeleaf
+    const usuario = /*[[${usuario}]]*/ 'defaultUser';
+    const tablaBody = document.getElementById('notificaciones-body');
+    const filtroTipo = document.getElementById('filtroTipo');
+    const notificacionesMapa = new Map(); // Para un manejo rápido de las notificaciones existentes
+
+    // --- Lógica de Integración Server-Sent Events (SSE) ---
+
+    /**
+     * Establece la conexión con el endpoint SSE para recibir el flujo continuo de datos.
+     */
+    function conectarSSE() {
+        // Conexión al endpoint WebFlux que produce MediaType.TEXT_EVENT_STREAM_VALUE
+        const eventSource = new EventSource(`/notificaciones/stream/${usuario}`);
+
+        // Manejador para cada evento 'message' (cada objeto Notificacion que emite el Flux)
+        eventSource.onmessage = function(event) {
+            try {
+                const notificacion = JSON.parse(event.data);
+                console.log("Notificación recibida en tiempo real:", notificacion);
+
+                // Solo actualiza si la notificación cumple con el filtro actual
+                if (debeMostrar(notificacion)) {
+                    actualizarNotificacion(notificacion);
+                } else if (notificacionesMapa.has(notificacion.id)) {
+                    // Si la notificación ya existía pero ahora no cumple el filtro, se quita (ej: si se filtra por INFO y llega una URGENTE)
+                    eliminarFilaDOM(notificacion.id);
+                }
+            } catch (e) {
+                console.error("Error al parsear el evento SSE:", e);
+            }
+        };
+
+        eventSource.onerror = function(err) {
+            console.error("Error en la conexión SSE. Intentando reconectar...", err);
+            eventSource.close();
+            // Opcional: Implementar lógica de reconexión con retardo
+            // setTimeout(conectarSSE, 5000);
+        };
+    }
+
+    /**
+     * Verifica si una notificación debe mostrarse basándose en el filtro de tipo actual.
+     */
+    function debeMostrar(notificacion) {
+        const tipoSeleccionado = filtroTipo.value;
+        return tipoSeleccionado === "TODOS" || notificacion.tipo === tipoSeleccionado;
+    }
+
+    /**
+     * Añade una nueva fila a la tabla o actualiza una existente.
+     */
+    function actualizarNotificacion(notificacion) {
+        let row = document.getElementById('row-' + notificacion.id);
+        const isNew = !row;
+
+        if (isNew) {
+            // Insertar las nuevas notificaciones al principio de la tabla
+            row = tablaBody.insertRow(0);
+            row.id = 'row-' + notificacion.id;
+        }
+
+        // Aplicar clases de estilo según el estado y tipo
+        row.className = (notificacion.leido ? '' : 'no-leida') + ' ' + notificacion.tipo.toLowerCase();
+
+        // Rellenar las celdas
+        const fechaFormateada = new Date(notificacion.fecha).toLocaleString();
+
+        row.innerHTML = `
+                <td>${notificacion.id.substring(0, 8)}...</td>
+                <td>${notificacion.mensaje}</td>
+                <td class="${notificacion.tipo.toLowerCase()}">${notificacion.tipo}</td>
+                <td>${fechaFormateada}</td>
+                <td>${notificacion.leido ? '✅ Sí' : '❌ No'}</td>
+                <td>
+                    ${notificacion.leido ? '' : `<button onclick="marcarLeida('${notificacion.id}')">Marcar Leído</button>`}
+                    <button onclick="eliminarNotificacion('${notificacion.id}')">Eliminar</button>
+                </td>
+            `;
+
+        notificacionesMapa.set(notificacion.id, notificacion);
+    }
+
+    /**
+     * Elimina una fila del DOM y del mapa de seguimiento.
+     */
+    function eliminarFilaDOM(id) {
+        const row = document.getElementById('row-' + id);
+        if (row) {
+            row.remove();
+        }
+        notificacionesMapa.delete(id);
+    }
+
+
+    // --- Funcionalidad CRUD y Filtrado (API Calls) ---
+
+    /**
+     * Carga el listado completo o filtrado desde la API REST. Se usa al inicio o al aplicar un filtro.
+     */
+    function cargarNotificacionesIniciales() {
+        const tipo = filtroTipo.value;
+        fetch(`/api/notificaciones/${usuario}/tipo/${tipo}`)
+            .then(response => response.json())
+            .then(data => {
+                tablaBody.innerHTML = ''; // Limpiar la tabla actual
+                notificacionesMapa.clear();
+
+                // Cargar los datos, los más recientes primero
+                // El orden ya viene dado por la query de la BD (OrderByFechaDesc)
+                data.forEach(notif => actualizarNotificacion(notif));
+            })
+            .catch(error => console.error('Error cargando notificaciones iniciales:', error));
+    }
+
+    /**
+     * Maneja el cambio del filtro, recargando la lista.
+     */
+    function aplicarFiltro() {
+        cargarNotificacionesIniciales();
+    }
+
+    /**
+     * Llama al endpoint para marcar como leída.
+     */
+    function marcarLeida(id) {
+        fetch(`/api/notificaciones/leida/${id}`, {
+            method: 'POST'
+        })
+            .then(response => {
+                if (!response.ok) {
+                    console.error(`Error al marcar ${id} como leída.`);
+                }
+                // Nota: La actualización visual es manejada por el Service que emite un evento SSE
+            })
+            .catch(error => console.error('Error de red al marcar leída:', error));
+    }
+
+    /**
+     * Llama al endpoint para eliminar una notificación.
+     */
+    function eliminarNotificacion(id) {
+        fetch(`/api/notificaciones/${id}`, {
+            method: 'DELETE'
+        })
+            .then(response => {
+                if (response.ok) {
+                    // Eliminar la fila del DOM inmediatamente sin esperar un SSE
+                    eliminarFilaDOM(id);
+                    console.log(`Notificación ${id} eliminada.`);
+                } else {
+                    console.error(`Error al eliminar notificación ${id}.`);
+                }
+            })
+            .catch(error => console.error('Error de red al eliminar:', error));
+    }
+
+    // --- Inicio de la Aplicación ---
+
+    /**
+     * Inicializa la carga de datos y la conexión SSE.
+     */
+    window.onload = function() {
+        cargarNotificacionesIniciales();
+        conectarSSE();
+    };
+
+</script>
+</body>
+</html>
