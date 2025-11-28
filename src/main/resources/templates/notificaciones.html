@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <title th:text="'Notificaciones en Tiempo Real - ' + ${usuario}">Notificaciones</title>
     <style>
-        /* Estilos CSS para mejorar la legibilidad y el estado */
+        /* Estilos CSS básicos */
         body { font-family: Arial, sans-serif; margin: 20px; }
         h1 { border-bottom: 2px solid #eee; padding-bottom: 10px; }
         table { width: 100%; border-collapse: collapse; margin-top: 15px; }
@@ -57,7 +57,7 @@
     const usuario = /*[[${usuario}]]*/ 'defaultUser';
     const tablaBody = document.getElementById('notificaciones-body');
     const filtroTipo = document.getElementById('filtroTipo');
-    const notificacionesMapa = new Map(); // Para un manejo rápido de las notificaciones existentes
+    const notificacionesMapa = new Map(); // Mapa para manejar notificaciones por ID
 
     // --- Lógica de Integración Server-Sent Events (SSE) ---
 
@@ -65,8 +65,8 @@
      * Establece la conexión con el endpoint SSE para recibir el flujo continuo de datos.
      */
     function conectarSSE() {
-        // Conexión al endpoint WebFlux que produce MediaType.TEXT_EVENT_STREAM_VALUE
-        const eventSource = new EventSource(`/notificaciones/stream/${usuario}`);
+        // CONEXIÓN CORREGIDA: Usando el puerto 8085
+        const eventSource = new EventSource(`http://localhost:8085/notificaciones/stream/${usuario}`);
 
         // Manejador para cada evento 'message' (cada objeto Notificacion que emite el Flux)
         eventSource.onmessage = function(event) {
@@ -74,23 +74,19 @@
                 const notificacion = JSON.parse(event.data);
                 console.log("Notificación recibida en tiempo real:", notificacion);
 
-                // Solo actualiza si la notificación cumple con el filtro actual
                 if (debeMostrar(notificacion)) {
                     actualizarNotificacion(notificacion);
                 } else if (notificacionesMapa.has(notificacion.id)) {
-                    // Si la notificación ya existía pero ahora no cumple el filtro, se quita (ej: si se filtra por INFO y llega una URGENTE)
                     eliminarFilaDOM(notificacion.id);
                 }
             } catch (e) {
-                console.error("Error al parsear el evento SSE:", e);
+                console.error("Error al parsear o procesar el evento SSE:", e);
             }
         };
 
         eventSource.onerror = function(err) {
-            console.error("Error en la conexión SSE. Intentando reconectar...", err);
+            console.error("Error en la conexión SSE:", err);
             eventSource.close();
-            // Opcional: Implementar lógica de reconexión con retardo
-            // setTimeout(conectarSSE, 5000);
         };
     }
 
@@ -109,9 +105,14 @@
         let row = document.getElementById('row-' + notificacion.id);
         const isNew = !row;
 
+        // Si hay un error y no hay ID (debe debuggear), no hacemos nada
+        if (!notificacion.id) {
+            console.error("Notificación sin ID. Fallo en la inserción/actualización.");
+            return;
+        }
+
         if (isNew) {
-            // Insertar las nuevas notificaciones al principio de la tabla
-            row = tablaBody.insertRow(0);
+            row = tablaBody.insertRow(0); // Insertar al inicio (más reciente)
             row.id = 'row-' + notificacion.id;
         }
 
@@ -155,14 +156,13 @@
      */
     function cargarNotificacionesIniciales() {
         const tipo = filtroTipo.value;
-        fetch(`/api/notificaciones/${usuario}/tipo/${tipo}`)
+        // CAMBIO AQUÍ: Usar el puerto 8085
+        fetch(`http://localhost:8085/api/notificaciones/${usuario}/tipo/${tipo}`)
             .then(response => response.json())
             .then(data => {
-                tablaBody.innerHTML = ''; // Limpiar la tabla actual
+                tablaBody.innerHTML = '';
                 notificacionesMapa.clear();
 
-                // Cargar los datos, los más recientes primero
-                // El orden ya viene dado por la query de la BD (OrderByFechaDesc)
                 data.forEach(notif => actualizarNotificacion(notif));
             })
             .catch(error => console.error('Error cargando notificaciones iniciales:', error));
@@ -179,14 +179,14 @@
      * Llama al endpoint para marcar como leída.
      */
     function marcarLeida(id) {
-        fetch(`/api/notificaciones/leida/${id}`, {
+        // CAMBIO AQUÍ: Usar el puerto 8085
+        fetch(`http://localhost:8085/api/notificaciones/leida/${id}`, {
             method: 'POST'
         })
             .then(response => {
                 if (!response.ok) {
                     console.error(`Error al marcar ${id} como leída.`);
                 }
-                // Nota: La actualización visual es manejada por el Service que emite un evento SSE
             })
             .catch(error => console.error('Error de red al marcar leída:', error));
     }
@@ -195,12 +195,12 @@
      * Llama al endpoint para eliminar una notificación.
      */
     function eliminarNotificacion(id) {
-        fetch(`/api/notificaciones/${id}`, {
+        // CAMBIO AQUÍ: Usar el puerto 8085
+        fetch(`http://localhost:8085/api/notificaciones/${id}`, {
             method: 'DELETE'
         })
             .then(response => {
                 if (response.ok) {
-                    // Eliminar la fila del DOM inmediatamente sin esperar un SSE
                     eliminarFilaDOM(id);
                     console.log(`Notificación ${id} eliminada.`);
                 } else {
