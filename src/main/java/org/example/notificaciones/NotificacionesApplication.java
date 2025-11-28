@@ -4,7 +4,10 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.data.mongodb.repository.config.EnableReactiveMongoRepositories;
 
-@SpringBootApplication
+@SpringBootApplication(
+
+        exclude = { org.springframework.boot.autoconfigure.mongo.MongoAutoConfiguration.class }
+)
 @EnableReactiveMongoRepositories
 public class NotificacionesApplication {
 
